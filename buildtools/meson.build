@@ -45,17 +45,17 @@ pmdinfo = py3 + files('gen-pmdinfo-cfile.py')
 pmdinfogen = py3 + files('pmdinfogen.py')
 if host_machine.system() == 'windows'
     if cc.get_id() == 'gcc'
-        pmdinfo += 'ar'
+        pmdinfo += find_program('ar')
     elif cc.get_id() == 'msvc'
         pmdinfo += 'lib'
     else
-        pmdinfo += 'llvm-ar'
+        pmdinfo += find_program('llvm-ar')
     endif
     pmdinfogen += 'coff'
 elif host_machine.system() == 'freebsd'
-    pmdinfo += 'llvm-ar'
+    pmdinfo += find_program('llvm-ar')
     pmdinfogen += 'elf'
 else
-    pmdinfo += 'ar'
+    pmdinfo += find_program('ar')
     pmdinfogen += 'elf'
 endif
