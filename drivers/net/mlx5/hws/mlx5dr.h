@@ -683,6 +683,37 @@ mlx5dr_action_create_dest_table(struct mlx5dr_context *ctx,
 				struct mlx5dr_table *tbl,
 				uint32_t flags);
 
+/* Create a goto action whose destination is a flow table given by its
+ * firmware table number, e.g. a table created outside of mlx5dr through DevX.
+ * The table must be of the given type and owned by the same context user.
+ * Supported on non root (HWS) tables only.
+ *
+ * @param[in] ctx
+ *	The context in which the new action will be created.
+ * @param[in] table_num
+ *	Firmware id of the destination flow table.
+ * @param[in] type
+ *	Type of the destination table.
+ * @param[in] flags
+ *	Action creation flags. (enum mlx5dr_action_flags)
+ * @return pointer to mlx5dr_action on success NULL otherwise.
+ */
+struct mlx5dr_action *
+mlx5dr_action_create_dest_table_num(struct mlx5dr_context *ctx,
+				    uint32_t table_num,
+				    enum mlx5dr_table_type type,
+				    uint32_t flags);
+
+/* Get the firmware id of a non root table.
+ *
+ * @param[in] tbl
+ *	Table to query.
+ * @param[out] ft_id
+ *	Firmware flow table id.
+ * @return zero on success non zero otherwise.
+ */
+int mlx5dr_table_get_ft_id(struct mlx5dr_table *tbl, uint32_t *ft_id);
+
 /* Create direct rule goto vport action.
  *
  * @param[in] ctx

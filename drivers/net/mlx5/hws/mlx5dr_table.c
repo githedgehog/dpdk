@@ -508,6 +508,16 @@ free_tbl:
 	return NULL;
 }
 
+int mlx5dr_table_get_ft_id(struct mlx5dr_table *tbl, uint32_t *ft_id)
+{
+	if (mlx5dr_table_is_root(tbl) || !tbl->ft) {
+		rte_errno = EINVAL;
+		return -rte_errno;
+	}
+	*ft_id = tbl->ft->id;
+	return 0;
+}
+
 int mlx5dr_table_destroy(struct mlx5dr_table *tbl)
 {
 	struct mlx5dr_context *ctx = tbl->ctx;

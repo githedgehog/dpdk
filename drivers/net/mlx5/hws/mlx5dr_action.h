@@ -229,6 +229,8 @@ struct mlx5dr_action {
 				struct {
 					struct mlx5dr_devx_obj *devx_obj;
 					enum mlx5dr_table_type type;
+					/* Target of a table-number action; devx_obj points here. */
+					struct mlx5dr_devx_obj ext_obj;
 				} dest_tbl;
 			};
 		};

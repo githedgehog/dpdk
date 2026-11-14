@@ -1461,6 +1461,38 @@ free_action:
 	return NULL;
 }
 
+struct mlx5dr_action *
+mlx5dr_action_create_dest_table_num(struct mlx5dr_context *ctx,
+				    uint32_t table_num,
+				    enum mlx5dr_table_type type,
+				    uint32_t flags)
+{
+	struct mlx5dr_action *action;
+
+	if (!mlx5dr_action_is_hws_flags(flags) ||
+	    mlx5dr_action_is_root_flags(flags)) {
+		DR_LOG(ERR, "Table number destination is supported on non root tables only");
+		rte_errno = ENOTSUP;
+		return NULL;
+	}
+
+	action = mlx5dr_action_create_generic(ctx, flags, MLX5DR_ACTION_TYP_TBL);
+	if (!action)
+		return NULL;
+
+	action->dest_tbl.type = type;
+	action->dest_tbl.ext_obj.obj = NULL;
+	action->dest_tbl.ext_obj.id = table_num;
+	action->dest_tbl.devx_obj = &action->dest_tbl.ext_obj;
+
+	if (mlx5dr_action_create_stcs(action, action->dest_tbl.devx_obj)) {
+		simple_free(action);
+		return NULL;
+	}
+
+	return action;
+}
+
 static int mlx5dr_action_get_dest_tir_obj(struct mlx5dr_context *ctx,
 					  struct mlx5dr_action *action,
 					  struct mlx5dr_devx_obj *obj,
