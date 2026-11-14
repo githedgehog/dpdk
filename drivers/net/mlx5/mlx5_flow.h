@@ -1642,6 +1642,14 @@ struct mlx5_hw_action_template {
 };
 
 /* mlx5 flow group struct. */
+/* HWS group mapped to a flow table created outside of the PMD. */
+struct mlx5_hw_ext_group {
+	LIST_ENTRY(mlx5_hw_ext_group) next;
+	uint32_t group; /* rte_flow group id. */
+	enum mlx5dr_table_type type; /* Table type of the group. */
+	uint32_t ft_id; /* Firmware id of the external flow table. */
+};
+
 struct mlx5_flow_group {
 	struct mlx5_list_entry entry;
 	LIST_ENTRY(mlx5_flow_group) next;

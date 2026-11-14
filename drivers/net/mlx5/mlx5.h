@@ -2004,8 +2004,11 @@ struct mlx5_representor_info {
 };
 
 struct mlx5_nta_sample_ctx;
+struct mlx5_hw_ext_group;
 struct mlx5_priv {
 	struct rte_eth_dev_data *dev_data;  /* Pointer to device data. */
+	/* HWS groups mapped to external flow tables. */
+	LIST_HEAD(mlx5_hw_ext_groups, mlx5_hw_ext_group) hw_ext_groups;
 	struct mlx5_dev_ctx_shared *sh; /* Shared device context. */
 	uint32_t dev_port; /* Device port number. */
 	struct rte_pci_device *pci_dev; /* Backend PCI device. */

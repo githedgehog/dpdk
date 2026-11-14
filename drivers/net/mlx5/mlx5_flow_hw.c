@@ -341,6 +341,12 @@ mlx5dr_table_type_name(enum mlx5dr_table_type type)
 #define MLX5_NT_DEFAULT_QUEUE_SIZE 32
 
 static int flow_hw_flush_all_ctrl_flows(struct rte_eth_dev *dev);
+static int __translate_group(struct rte_eth_dev *dev,
+			     const struct rte_flow_attr *flow_attr,
+			     bool external,
+			     uint32_t group,
+			     uint32_t *table_group,
+			     struct rte_flow_error *error);
 static int flow_hw_translate_group(struct rte_eth_dev *dev,
 				   const struct mlx5_flow_template_table_cfg *cfg,
 				   uint32_t group,
@@ -606,6 +612,126 @@ flow_hw_hashfields_set(struct mlx5_flow_rss_desc *rss_desc,
 	if (rss_inner)
 		fields |= IBV_RX_HASH_INNER;
 	*hash_fields |= fields;
+}
+
+static struct mlx5_hw_ext_group *
+flow_hw_ext_group_find(struct mlx5_priv *priv, uint32_t group,
+		       enum mlx5dr_table_type type)
+{
+	struct mlx5_hw_ext_group *ext;
+
+	LIST_FOREACH(ext, &priv->hw_ext_groups, next)
+		if (ext->group == group && ext->type == type)
+			return ext;
+	return NULL;
+}
+
+static int
+flow_hw_ext_group_attr(struct rte_eth_dev *dev, const struct rte_flow_attr *attr,
+		       struct rte_flow_attr *flow_attr, enum mlx5dr_table_type *type)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+
+	uint32_t table_group = 0;
+
+	if (attr == NULL || !attr->group ||
+	    attr->ingress + attr->egress + attr->transfer != 1)
+		return -EINVAL;
+	*flow_attr = *attr;
+	/* Use the group number the PMD uses internally for user groups. */
+	if (__translate_group(dev, attr, true, attr->group, &table_group, NULL))
+		return -EINVAL;
+	flow_attr->group = table_group;
+	*type = get_mlx5dr_table_type(flow_attr, 0, is_unified_fdb(priv));
+	return 0;
+}
+
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pmd_mlx5_external_group_set, 26.07)
+int
+rte_pmd_mlx5_external_group_set(uint16_t port_id, const struct rte_flow_attr *attr,
+				uint32_t ft_id)
+{
+	struct rte_eth_dev *dev;
+	struct mlx5_priv *priv;
+	struct mlx5_hw_ext_group *ext;
+	struct rte_flow_attr flow_attr;
+	enum mlx5dr_table_type type;
+	uint32_t specialize = 0;
+	struct mlx5_flow_cb_ctx ctx = { .data = &flow_attr, .data2 = &specialize };
+	int ret;
+
+	if (!rte_eth_dev_is_valid_port(port_id))
+		return -ENODEV;
+	dev = &rte_eth_devices[port_id];
+	if (!mlx5_hws_active(dev))
+		return -ENOTSUP;
+	priv = dev->data->dev_private;
+	ret = flow_hw_ext_group_attr(dev, attr, &flow_attr, &type);
+	if (ret)
+		return ret;
+	ctx.dev = dev;
+	/* Existing jumps or tables already resolved the group. */
+	if (priv->sh->groups &&
+	    mlx5_hlist_lookup(priv->sh->groups, flow_attr.group, &ctx))
+		return -EBUSY;
+	ext = flow_hw_ext_group_find(priv, flow_attr.group, type);
+	if (ft_id == 0) {
+		if (ext == NULL)
+			return -ENOENT;
+		LIST_REMOVE(ext, next);
+		mlx5_free(ext);
+		return 0;
+	}
+	if (ext != NULL) {
+		ext->ft_id = ft_id;
+		return 0;
+	}
+	ext = mlx5_malloc(MLX5_MEM_ZERO, sizeof(*ext), 0, SOCKET_ID_ANY);
+	if (ext == NULL)
+		return -ENOMEM;
+	ext->group = flow_attr.group;
+	ext->type = type;
+	ext->ft_id = ft_id;
+	LIST_INSERT_HEAD(&priv->hw_ext_groups, ext, next);
+	return 0;
+}
+
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pmd_mlx5_group_ft_id, 26.07)
+int
+rte_pmd_mlx5_group_ft_id(uint16_t port_id, const struct rte_flow_attr *attr,
+			 uint32_t *ft_id)
+{
+	struct rte_eth_dev *dev;
+	struct mlx5_priv *priv;
+	struct rte_flow_attr flow_attr;
+	enum mlx5dr_table_type type;
+	uint32_t specialize = 0;
+	struct mlx5_flow_cb_ctx ctx = { .data = &flow_attr, .data2 = &specialize };
+	struct mlx5_list_entry *ge;
+	struct mlx5_flow_group *grp;
+	int ret;
+
+	if (!rte_eth_dev_is_valid_port(port_id) || ft_id == NULL)
+		return -EINVAL;
+	dev = &rte_eth_devices[port_id];
+	if (!mlx5_hws_active(dev))
+		return -ENOTSUP;
+	priv = dev->data->dev_private;
+	ret = flow_hw_ext_group_attr(dev, attr, &flow_attr, &type);
+	if (ret)
+		return ret;
+	ctx.dev = dev;
+	if (priv->sh->groups == NULL)
+		return -ENOENT;
+	ge = mlx5_hlist_lookup(priv->sh->groups, flow_attr.group, &ctx);
+	if (ge == NULL)
+		return -ENOENT;
+	grp = container_of(ge, struct mlx5_flow_group, entry);
+	if (grp->tbl == NULL)
+		return -EINVAL;
+	if (mlx5dr_table_get_ft_id(grp->tbl, ft_id))
+		return -rte_errno;
+	return 0;
 }
 
 RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pmd_mlx5_rss_tir_register, 26.03)
@@ -2870,6 +2996,12 @@ __flow_hw_translate_actions_template(struct rte_eth_dev *dev,
 				acts->rule_acts[dr_pos].action = (!!attr->group) ?
 								 acts->jump->hws_action :
 								 acts->jump->root_action;
+				if (!acts->rule_acts[dr_pos].action) {
+					rte_flow_error_set(&sub_error, ENOTSUP,
+							   RTE_FLOW_ERROR_TYPE_ACTION, actions,
+							   "jump from root table to an external group is not supported");
+					goto err;
+				}
 			} else if (__flow_hw_act_data_general_append
 					(priv, acts, actions->type,
 					 src_pos, dr_pos)){
@@ -3838,6 +3970,8 @@ flow_hw_actions_construct(struct rte_eth_dev *dev,
 			rule_acts[act_data->action_dst].action =
 			(!!attr.group) ? jump->hws_action : jump->root_action;
 			flow->jump = jump;
+			if (!rule_acts[act_data->action_dst].action)
+				goto error;
 			flow->flags |= MLX5_FLOW_HW_FLOW_FLAG_FATE_JUMP;
 			break;
 		case RTE_FLOW_ACTION_TYPE_RSS:
@@ -5376,6 +5510,13 @@ flow_hw_table_create(struct rte_eth_dev *dev,
 	if (!ge)
 		goto error;
 	grp = container_of(ge, struct mlx5_flow_group, entry);
+	if (!grp->tbl) {
+		mlx5_hlist_unregister(priv->sh->groups, ge);
+		rte_flow_error_set(&sub_error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ATTR_GROUP, NULL,
+				   "group is mapped to an external flow table");
+		rte_errno = ENOTSUP;
+		goto error;
+	}
 	/* Verify unified fdb sub domains consistency */
 	table_type = get_mlx5dr_table_type(&flow_attr, specialize, unified_fdb);
 	if (table_type != grp->type) {
@@ -5924,6 +6065,10 @@ flow_hw_group_set_miss_group(struct rte_eth_dev *dev,
 		ref = true;
 	}
 
+	if (!src_grp->tbl || !dst_grp->tbl) {
+		ret = -ENOTSUP;
+		goto mlx5dr_error;
+	}
 	ret = mlx5dr_table_set_default_miss(src_grp->tbl, dst_grp->tbl);
 	if (ret)
 		goto mlx5dr_error;
@@ -9727,6 +9872,7 @@ mlx5_flow_hw_grp_create_cb(void *tool_ctx, void *cb_ctx)
 	struct mlx5_flow_group *grp_data;
 	struct mlx5dr_table *tbl = NULL;
 	struct mlx5dr_action *jump;
+	struct mlx5_hw_ext_group *ext;
 	uint32_t hws_flags;
 	uint32_t idx = 0;
 	MKSTR(matcher_name, "%s_%s_%u_%u_matcher_list",
@@ -9743,6 +9889,21 @@ mlx5_flow_hw_grp_create_cb(void *tool_ctx, void *cb_ctx)
 	}
 	dr_tbl_attr.level = attr->group;
 	dr_tbl_attr.type = get_mlx5dr_table_type(attr, *specialize, unified_fdb);
+	ext = flow_hw_ext_group_find(priv, attr->group, dr_tbl_attr.type);
+	if (ext) {
+		/*
+		 * The group is a flow table owned by the application.
+		 * Only non root tables can jump to it; no rules can be
+		 * inserted into it through rte_flow.
+		 */
+		jump = mlx5dr_action_create_dest_table_num
+			(priv->dr_ctx, ext->ft_id, dr_tbl_attr.type,
+			 mlx5_hw_act_dest_table_flag[dr_tbl_attr.type]);
+		if (!jump)
+			goto error;
+		grp_data->jump.hws_action = jump;
+		goto finish;
+	}
 	tbl = mlx5dr_table_create(priv->dr_ctx, &dr_tbl_attr);
 	if (!tbl)
 		goto error;
@@ -9769,7 +9930,7 @@ mlx5_flow_hw_grp_create_cb(void *tool_ctx, void *cb_ctx)
 			goto error;
 		grp_data->jump.root_action = jump;
 	}
-
+finish:
 	grp_data->matchers = mlx5_list_create(matcher_name, sh, true,
 					      mlx5_flow_matcher_create_cb,
 					      mlx5_flow_matcher_match_cb,
@@ -9819,7 +9980,8 @@ mlx5_flow_hw_grp_remove_cb(void *tool_ctx, struct mlx5_list_entry *entry)
 	if (grp_data->jump.root_action)
 		mlx5dr_action_destroy(grp_data->jump.root_action);
 	mlx5_list_destroy(grp_data->matchers);
-	mlx5dr_table_destroy(grp_data->tbl);
+	if (grp_data->tbl)
+		mlx5dr_table_destroy(grp_data->tbl);
 	mlx5_ipool_free(sh->ipool[MLX5_IPOOL_HW_GRP], grp_data->idx);
 }
 

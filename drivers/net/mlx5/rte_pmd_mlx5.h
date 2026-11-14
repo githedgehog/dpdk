@@ -697,6 +697,59 @@ rte_pmd_mlx5_disable_steering(void);
 int
 rte_pmd_mlx5_enable_steering(void);
 
+/**
+ * Map an rte_flow group to a flow table created outside of the PMD.
+ *
+ * After this call, JUMP actions to the group from non root (HW steering)
+ * tables forward packets to the flow table whose firmware id is @p ft_id.
+ * The table must belong to the same DevX user context as the port (for
+ * example a context shared through the cmd_fd/pd_handle device arguments)
+ * and match the direction given by @p attr. Rules cannot be inserted into
+ * the group through rte_flow, and root (group 0) rules cannot jump to it.
+ *
+ * Must be called before any rule or template table refers to the group.
+ *
+ * @param[in] port_id
+ *   The port identifier of the Ethernet device.
+ * @param[in] attr
+ *   Group number (not 0) and exactly one of ingress, egress, transfer.
+ * @param[in] ft_id
+ *   Firmware id of the external flow table, or 0 to remove the mapping.
+ * @return
+ *   - (0) if successful.
+ *   - (-EINVAL) if @p attr is invalid.
+ *   - (-ENOTSUP) if HW steering is not enabled.
+ *   - (-EBUSY) if the group is already in use.
+ *   - (-ENOENT) if removing a mapping that does not exist.
+ */
+__rte_experimental
+int
+rte_pmd_mlx5_external_group_set(uint16_t port_id, const struct rte_flow_attr *attr,
+				uint32_t ft_id);
+
+/**
+ * Get the firmware id of the flow table backing an rte_flow group.
+ *
+ * Lets flow tables created outside of the PMD forward packets into the
+ * group. The group must already exist (a template table or rule uses it).
+ *
+ * @param[in] port_id
+ *   The port identifier of the Ethernet device.
+ * @param[in] attr
+ *   Group number (not 0) and exactly one of ingress, egress, transfer.
+ * @param[out] ft_id
+ *   Firmware flow table id.
+ * @return
+ *   - (0) if successful.
+ *   - (-ENOENT) if the group does not exist.
+ *   - (-EINVAL) if @p attr is invalid or the group is external.
+ *   - (-ENOTSUP) if HW steering is not enabled.
+ */
+__rte_experimental
+int
+rte_pmd_mlx5_group_ft_id(uint16_t port_id, const struct rte_flow_attr *attr,
+			 uint32_t *ft_id);
+
 struct rte_pmd_mlx5_rss_devx {
 	void *obj; /**< DevX object pointer. */
 	void *destroy_handle; /**< Destroy handle passed to #rte_pmd_mlx5_rss_tir_unregister. */
